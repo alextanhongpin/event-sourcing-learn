@@ -23,3 +23,8 @@ How do we define the initial state of any events?
 ## Undo
 
 In the case of undo, do we create a new event to undo it? Or delete the event that causes the undo? And how does it affect future states after the undo?
+
+## Thoughts
+Aside from splitting the read and write, what other differences does CQRS provide?
+
+For command/event handlers, we might not expect the response. This differs from typical request/response pattern, where the interaction is synchronous. For command/event pattern, they are typically asynchronous, and is handled through a queue. The events can be pushed to a queue, and there can be multiple consumers that listens to the queue and perform actions.
