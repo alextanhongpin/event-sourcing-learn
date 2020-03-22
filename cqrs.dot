@@ -1,0 +1,45 @@
+digraph G {
+  labelloc="t"
+  label="CQRS Diagram"
+  node[shape = box]
+  ui[label = "user interface"]
+  eh[label = "event handlers", style="filled", color="lightgrey"]
+  es[label = "event store/message bus"] 
+  
+  {
+    rank = "same"
+    cb[label = "command bus"]
+    qs[label = "query service"]
+  }
+
+  {
+    rank = "same"
+    ch[label = "command handlers"]
+    dl[label = "data layer"]
+  }
+
+  {
+    rank = "same"
+    db[label = "database"]
+    dm[label = "domain model"]
+  } 
+
+  {
+    rank = "same"
+    repo[label = "repository"]
+    den[label = "denormalizer"]
+  }
+
+  ui -> cb[label = "commands"]
+  ui -> qs[label = "queries"]
+
+  cb -> ch
+  ch -> dm[dir = "both"]
+  dm -> repo[dir = "both"]
+  repo -> eh
+  eh -> es[label = "events", dir = "both"]
+  eh -> den
+  db -> den[dir = "both"]
+  db -> dl[dir = "both"]
+  qs -> dl
+}
