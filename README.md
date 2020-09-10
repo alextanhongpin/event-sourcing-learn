@@ -31,3 +31,8 @@ For command/event handlers, we might not expect the response. This differs from 
 
 ## References
 - https://medium.com/@marinithiago/doing-event-sourcing-without-building-a-spaceship-6dc3e7eac00
+- https://javascript-conference.com/node-js/implement-event-sourcing-in-node-js/
+- https://blog.insiderattack.net/implementing-event-sourcing-and-cqrs-pattern-with-mongodb-66991e7b72be
+- https://docs.microsoft.com/en-us/azure/architecture/patterns/event-sourcing#:~:text=The%20Event%20Sourcing%20pattern%20defines,in%20an%20append%2Donly%20store.&text=The%20events%20are%20persisted%20in,current%20state%20of%20the%20data.
+- https://kickstarter.engineering/event-sourcing-made-simple-4a2625113224
+- http://blog.leifbattermann.de/2017/04/21/12-things-you-should-know-about-event-sourcing/
