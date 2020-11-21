@@ -436,7 +436,7 @@ import (
 
 var ErrPatientDischarged = errors.New("Patient is discharged")
 
-type RawAggregate struct {
+type Aggregate struct {
 	// AggregateID is a unique identifier.
 	AggregateID string `json:"aggregate_id"`
 
@@ -448,7 +448,15 @@ type RawAggregate struct {
 	Version int `json:"version"`
 }
 
-type RawEvent struct {
+func NewAggregate(id, eventType string) Aggregate {
+	return Aggregate{
+		AggregateID: id,
+		Type:        eventType,
+		Version:     0,
+	}
+}
+
+type Event struct {
 	// AggregateID is a foreign key pointing to the aggregate table.
 	AggregateID string `json:"aggregate_id"`
 
@@ -462,7 +470,7 @@ type RawEvent struct {
 	EventType string `json:"event_type"`
 }
 
-type Event interface {
+type PatientEvent interface {
 	isEvent()
 }
 
@@ -488,26 +496,14 @@ type PatientDischarged struct {
 
 // Patient aggregate.
 type Patient struct {
-	ID         string
-	Ward       int
-	Name       string
-	Age        int
-	Discharged bool
+	ID         string `json:"id"`
+	Ward       int    `json:"ward"`
+	Name       string `json:"name"`
+	Age        int    `json:"age"`
+	Discharged bool   `json:"discharged"`
 
-	Events  []Event
-	Version int
-}
-
-func NewFromEvents(events []Event) *Patient {
-	var isNew bool
-	p := new(Patient)
-
-	for _, event := range events {
-		p.On(event, isNew)
-	}
-	p.Events = events
-
-	return p
+	Events  []PatientEvent `json:"-"`
+	Version int            `json:"-"`
 }
 
 func New(id, name string, age, ward int) *Patient {
@@ -544,7 +540,7 @@ func (p *Patient) Discharge() error {
 }
 
 // On handles patient events on the patient aggregate.
-func (p *Patient) On(event Event, new bool) {
+func (p *Patient) On(event PatientEvent) {
 	switch e := event.(type) {
 	case *PatientAdmitted:
 		p.ID = e.ID
@@ -555,16 +551,11 @@ func (p *Patient) On(event Event, new bool) {
 	case *PatientTransferred:
 		p.Ward = e.NewWardNumber
 	}
-
-	if !new {
-		p.Version++
-	}
 }
 
-func (p *Patient) raise(event Event) {
+func (p *Patient) raise(event PatientEvent) {
 	p.Events = append(p.Events, event)
-	isNew := true
-	p.On(event, isNew)
+	p.On(event)
 }
 
 type Service struct {
@@ -606,49 +597,58 @@ func (s *Service) DischargePatient(ctx context.Context, id string) error {
 }
 
 type Repository struct {
-	aggregates map[string]RawAggregate
-	events     map[string][]RawEvent
+	aggregates map[string]Aggregate
+	events     map[string][]Event
 }
 
 func NewRepository() *Repository {
 	return &Repository{
-		aggregates: make(map[string]RawAggregate, 0),
-		events:     make(map[string][]RawEvent, 0),
+		aggregates: make(map[string]Aggregate, 0),
+		events:     make(map[string][]Event, 0),
 	}
+}
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func (r *Repository) Save(ctx context.Context, p *Patient) error {
-	events := make([]RawEvent, len(p.Events))
+	var version int
+	events := make([]Event, len(p.Events))
 	for i, e := range p.Events {
 		data, err := json.Marshal(e)
 		if err != nil {
 			return fmt.Errorf("marshal error: %w", err)
 		}
-		events[i] = RawEvent{
+		events[i] = Event{
 			AggregateID: p.ID,
 			EventType:   eventName(e),
 			EventData:   json.RawMessage(data),
-			Version:     p.Version + i,
+			Version:     p.Version + i + 1,
 		}
+		version = max(version, p.Version+i+1)
 	}
-	r.events[p.ID] = events
-	r.aggregates[p.ID] = RawAggregate{
+	r.events[p.ID] = append(r.events[p.ID], events...)
+	r.aggregates[p.ID] = Aggregate{
 		AggregateID: p.ID,
 		Type:        "Patient",
-		Version:     p.Version + len(events),
+		Version:     version,
 	}
 	return nil
 }
 
 func (r *Repository) Load(ctx context.Context, id string) (*Patient, error) {
-	_, ok := r.aggregates[id]
+	aggregate, ok := r.aggregates[id]
 	if !ok {
 		return New(id, "", 0, 0), nil
 	}
-	rawEvents, ok := r.events[id]
-	events := make([]Event, len(rawEvents))
-	for i, r := range rawEvents {
-		var e Event
+
+	events, ok := r.events[id]
+	patientEvents := make([]PatientEvent, len(events))
+	for i, r := range events {
+		var e PatientEvent
 		switch r.EventType {
 		case eventName(PatientAdmitted{}):
 			e = new(PatientAdmitted)
@@ -660,12 +660,20 @@ func (r *Repository) Load(ctx context.Context, id string) (*Patient, error) {
 		if err := json.Unmarshal(r.EventData, e); err != nil {
 			return nil, err
 		}
-		events[i] = e
+		patientEvents[i] = e
 	}
-	return NewFromEvents(events), nil
+	// Create a new Aggregate from the store.
+	// The Aggregate should only have the final state, without events.
+	p := new(Patient)
+	p.ID = aggregate.AggregateID
+	p.Version = aggregate.Version
+	for _, event := range patientEvents {
+		p.On(event)
+	}
+	return p, nil
 }
 
-func eventName(event Event) string {
+func eventName(event PatientEvent) string {
 	t := reflect.TypeOf(event)
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
@@ -685,11 +693,20 @@ func main() {
 	if err := svc.DischargePatient(context.Background(), "john"); err != nil {
 		log.Fatalf("error discharging patient: %v", err)
 	}
+	if err := svc.TransferPatient(context.Background(), "alice", 1); err != nil {
+		log.Fatalf("error transfering patient: %v", err)
+	}
+	fmt.Printf("Aggregates: %#v\n", repo.aggregates)
+	fmt.Println("Events found: ", len(repo.events["john"]))
+
+	for idx, evt := range repo.events["john"] {
+		fmt.Printf("%d. %#v\n", idx+1, evt)
+	}
+
 	john, err := repo.Load(context.Background(), "john")
 	if err != nil {
 		log.Fatalf("error loading user: %v", err)
 	}
 	fmt.Printf("%#v\n", john)
-	fmt.Printf("%#v\n", repo)
 }
 ```
