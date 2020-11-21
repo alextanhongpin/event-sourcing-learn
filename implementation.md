@@ -169,3 +169,248 @@ async function main() {
 
 main().catch(console.error)
 ```
+
+## Golang example
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"reflect"
+)
+
+type Record struct {
+	Version int             `json:"int"`
+	Data    json.RawMessage `json:"data"`
+	Type    string          `json:"event_type"`
+}
+
+var ErrPatientDischarged = errors.New("Patient is discharged")
+
+type Event interface {
+	isEvent()
+}
+
+func (e PatientAdmitted) isEvent()    {}
+func (e PatientTransferred) isEvent() {}
+func (e PatientDischarged) isEvent()  {}
+
+type PatientAdmitted struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Ward int    `json:"ward"`
+	Age  int    `json:"age"`
+}
+
+type PatientTransferred struct {
+	ID            string `json:"id"`
+	NewWardNumber int    `json:"new_ward"`
+}
+
+type PatientDischarged struct {
+	ID string `json:"id"`
+}
+
+// Patient aggregate.
+type Patient struct {
+	ID         string
+	Ward       int
+	Name       string
+	Age        int
+	Discharged bool
+
+	Events  []Event
+	Version int
+}
+
+func NewFromEvents(events []Event) *Patient {
+	var isNew bool
+	p := new(Patient)
+
+	for _, event := range events {
+		p.On(event, isNew)
+	}
+	p.Events = events
+
+	return p
+}
+
+func New(id, name string, age, ward int) *Patient {
+	p := new(Patient)
+	p.raise(&PatientAdmitted{
+		ID:   id,
+		Name: name,
+		Age:  age,
+		Ward: ward,
+	})
+	return p
+}
+
+func (p *Patient) Transfer(newWard int) error {
+	if p.Discharged {
+		return ErrPatientDischarged
+	}
+	p.raise(&PatientTransferred{
+		ID:            p.ID,
+		NewWardNumber: newWard,
+	})
+	return nil
+}
+
+func (p *Patient) Discharge() error {
+	if p.Discharged {
+		return ErrPatientDischarged
+	}
+	p.raise(&PatientDischarged{
+		ID: p.ID,
+	})
+
+	return nil
+}
+
+// On handles patient events on the patient aggregate.
+func (p *Patient) On(event Event, new bool) {
+	switch e := event.(type) {
+	case *PatientAdmitted:
+		p.ID = e.ID
+		p.Age = e.Age
+		p.Ward = e.Ward
+	case *PatientDischarged:
+		p.Discharged = true
+	case *PatientTransferred:
+		p.Ward = e.NewWardNumber
+	}
+
+	if !new {
+		p.Version++
+	}
+}
+
+func (p *Patient) raise(event Event) {
+	p.Events = append(p.Events, event)
+	isNew := true
+	p.On(event, isNew)
+}
+
+type Service struct {
+	repo *Repository
+}
+
+func NewService(repo *Repository) *Service {
+	return &Service{
+		repo: repo,
+	}
+}
+
+func (s *Service) TransferPatient(ctx context.Context, id string, newWard int) error {
+	p, err := s.repo.Load(ctx, id)
+	if err != nil {
+		return fmt.Errorf("error loading: %w", err)
+	}
+	if err := p.Transfer(newWard); err != nil {
+		return fmt.Errorf("error transferring: %w", err)
+	}
+	if err := s.repo.Save(ctx, p); err != nil {
+		return fmt.Errorf("error saving transferred patient: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) DischargePatient(ctx context.Context, id string) error {
+	p, err := s.repo.Load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := p.Discharge(); err != nil {
+		return err
+	}
+	if err := s.repo.Save(ctx, p); err != nil {
+		return err
+	}
+	return nil
+}
+
+type Repository struct {
+	records map[string][]Record
+}
+
+func NewRepository() *Repository {
+	return &Repository{
+		records: make(map[string][]Record, 0),
+	}
+}
+
+func (r *Repository) Save(ctx context.Context, p *Patient) error {
+	records := make([]Record, len(p.Events))
+	for i, e := range p.Events {
+		data, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("marshal error: %w", err)
+		}
+		records[i] = Record{
+			Type:    eventName(e),
+			Data:    json.RawMessage(data),
+			Version: p.Version + i,
+		}
+	}
+	r.records[p.ID] = records
+	return nil
+}
+
+func (r *Repository) Load(ctx context.Context, id string) (*Patient, error) {
+	records, ok := r.records[id]
+	if !ok {
+		return New(id, "", 0, 0), nil
+	}
+	events := make([]Event, len(records))
+	for i, r := range records {
+		var e Event
+		switch r.Type {
+		case eventName(PatientAdmitted{}):
+			e = new(PatientAdmitted)
+		case eventName(PatientTransferred{}):
+			e = new(PatientTransferred)
+		case eventName(PatientDischarged{}):
+			e = new(PatientDischarged)
+		}
+		if err := json.Unmarshal(r.Data, e); err != nil {
+			return nil, err
+		}
+		events[i] = e
+	}
+	return NewFromEvents(events), nil
+}
+
+func eventName(event Event) string {
+	t := reflect.TypeOf(event)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t.Name()
+}
+
+func main() {
+	repo := NewRepository()
+	svc := NewService(repo)
+	if err := svc.TransferPatient(context.Background(), "john", 51); err != nil {
+		log.Fatalf("error transfering patient: %v", err)
+	}
+	if err := svc.TransferPatient(context.Background(), "john", 42); err != nil {
+		log.Fatalf("error transfering patient: %v", err)
+	}
+	if err := svc.DischargePatient(context.Background(), "john"); err != nil {
+		log.Fatalf("error discharging patient: %v", err)
+	}
+	john, err := repo.Load(context.Background(), "john")
+	if err != nil {
+		log.Fatalf("error loading user: %v", err)
+	}
+	fmt.Println(john)
+	fmt.Printf("%#v\n", repo)
+}
+```
