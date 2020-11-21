@@ -418,3 +418,278 @@ func main() {
 	fmt.Printf("%#v\n", repo)
 }
 ```
+
+
+## Another implementation with golang 
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"reflect"
+)
+
+var ErrPatientDischarged = errors.New("Patient is discharged")
+
+type RawAggregate struct {
+	// AggregateID is a unique identifier.
+	AggregateID string `json:"aggregate_id"`
+
+	// Type of aggregate. In an object-oriented event sourcing implementation, this is the aggregate's class name.
+	Type string `json:"type"`
+
+	// Current version of the aggregate. Incremented every time an event is applied to the aggregate
+	// and indicates how many events have been applied to it since it was first created.
+	Version int `json:"version"`
+}
+
+type RawEvent struct {
+	// AggregateID is a foreign key pointing to the aggregate table.
+	AggregateID string `json:"aggregate_id"`
+
+	// Version is the incremented version number.
+	Version int `json:"version"`
+
+	// Event data is the actual event.
+	EventData json.RawMessage `json:"event_data"`
+
+	// Type of event
+	EventType string `json:"event_type"`
+}
+
+type Event interface {
+	isEvent()
+}
+
+func (e PatientAdmitted) isEvent()    {}
+func (e PatientTransferred) isEvent() {}
+func (e PatientDischarged) isEvent()  {}
+
+type PatientAdmitted struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Ward int    `json:"ward"`
+	Age  int    `json:"age"`
+}
+
+type PatientTransferred struct {
+	ID            string `json:"id"`
+	NewWardNumber int    `json:"new_ward"`
+}
+
+type PatientDischarged struct {
+	ID string `json:"id"`
+}
+
+// Patient aggregate.
+type Patient struct {
+	ID         string
+	Ward       int
+	Name       string
+	Age        int
+	Discharged bool
+
+	Events  []Event
+	Version int
+}
+
+func NewFromEvents(events []Event) *Patient {
+	var isNew bool
+	p := new(Patient)
+
+	for _, event := range events {
+		p.On(event, isNew)
+	}
+	p.Events = events
+
+	return p
+}
+
+func New(id, name string, age, ward int) *Patient {
+	p := new(Patient)
+	p.raise(&PatientAdmitted{
+		ID:   id,
+		Name: name,
+		Age:  age,
+		Ward: ward,
+	})
+	return p
+}
+
+func (p *Patient) Transfer(newWard int) error {
+	if p.Discharged {
+		return ErrPatientDischarged
+	}
+	p.raise(&PatientTransferred{
+		ID:            p.ID,
+		NewWardNumber: newWard,
+	})
+	return nil
+}
+
+func (p *Patient) Discharge() error {
+	if p.Discharged {
+		return ErrPatientDischarged
+	}
+	p.raise(&PatientDischarged{
+		ID: p.ID,
+	})
+
+	return nil
+}
+
+// On handles patient events on the patient aggregate.
+func (p *Patient) On(event Event, new bool) {
+	switch e := event.(type) {
+	case *PatientAdmitted:
+		p.ID = e.ID
+		p.Age = e.Age
+		p.Ward = e.Ward
+	case *PatientDischarged:
+		p.Discharged = true
+	case *PatientTransferred:
+		p.Ward = e.NewWardNumber
+	}
+
+	if !new {
+		p.Version++
+	}
+}
+
+func (p *Patient) raise(event Event) {
+	p.Events = append(p.Events, event)
+	isNew := true
+	p.On(event, isNew)
+}
+
+type Service struct {
+	repo *Repository
+}
+
+func NewService(repo *Repository) *Service {
+	return &Service{
+		repo: repo,
+	}
+}
+
+func (s *Service) TransferPatient(ctx context.Context, id string, newWard int) error {
+	p, err := s.repo.Load(ctx, id)
+	if err != nil {
+		return fmt.Errorf("error loading: %w", err)
+	}
+	if err := p.Transfer(newWard); err != nil {
+		return fmt.Errorf("error transferring: %w", err)
+	}
+	if err := s.repo.Save(ctx, p); err != nil {
+		return fmt.Errorf("error saving transferred patient: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) DischargePatient(ctx context.Context, id string) error {
+	p, err := s.repo.Load(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := p.Discharge(); err != nil {
+		return err
+	}
+	if err := s.repo.Save(ctx, p); err != nil {
+		return err
+	}
+	return nil
+}
+
+type Repository struct {
+	aggregates map[string]RawAggregate
+	events     map[string][]RawEvent
+}
+
+func NewRepository() *Repository {
+	return &Repository{
+		aggregates: make(map[string]RawAggregate, 0),
+		events:     make(map[string][]RawEvent, 0),
+	}
+}
+
+func (r *Repository) Save(ctx context.Context, p *Patient) error {
+	events := make([]RawEvent, len(p.Events))
+	for i, e := range p.Events {
+		data, err := json.Marshal(e)
+		if err != nil {
+			return fmt.Errorf("marshal error: %w", err)
+		}
+		events[i] = RawEvent{
+			AggregateID: p.ID,
+			EventType:   eventName(e),
+			EventData:   json.RawMessage(data),
+			Version:     p.Version + i,
+		}
+	}
+	r.events[p.ID] = events
+	r.aggregates[p.ID] = RawAggregate{
+		AggregateID: p.ID,
+		Type:        "Patient",
+		Version:     p.Version + len(events),
+	}
+	return nil
+}
+
+func (r *Repository) Load(ctx context.Context, id string) (*Patient, error) {
+	_, ok := r.aggregates[id]
+	if !ok {
+		return New(id, "", 0, 0), nil
+	}
+	rawEvents, ok := r.events[id]
+	events := make([]Event, len(rawEvents))
+	for i, r := range rawEvents {
+		var e Event
+		switch r.EventType {
+		case eventName(PatientAdmitted{}):
+			e = new(PatientAdmitted)
+		case eventName(PatientTransferred{}):
+			e = new(PatientTransferred)
+		case eventName(PatientDischarged{}):
+			e = new(PatientDischarged)
+		}
+		if err := json.Unmarshal(r.EventData, e); err != nil {
+			return nil, err
+		}
+		events[i] = e
+	}
+	return NewFromEvents(events), nil
+}
+
+func eventName(event Event) string {
+	t := reflect.TypeOf(event)
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
+	}
+	return t.Name()
+}
+
+func main() {
+	repo := NewRepository()
+	svc := NewService(repo)
+	if err := svc.TransferPatient(context.Background(), "john", 51); err != nil {
+		log.Fatalf("error transfering patient: %v", err)
+	}
+	if err := svc.TransferPatient(context.Background(), "john", 42); err != nil {
+		log.Fatalf("error transfering patient: %v", err)
+	}
+	if err := svc.DischargePatient(context.Background(), "john"); err != nil {
+		log.Fatalf("error discharging patient: %v", err)
+	}
+	john, err := repo.Load(context.Background(), "john")
+	if err != nil {
+		log.Fatalf("error loading user: %v", err)
+	}
+	fmt.Printf("%#v\n", john)
+	fmt.Printf("%#v\n", repo)
+}
+```
