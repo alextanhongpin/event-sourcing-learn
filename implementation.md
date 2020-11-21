@@ -1,3 +1,7 @@
+# Event Sourcing Implementation 
+
+Based on the following references: https://victoramartinez.com/posts/event-sourcing-in-go/
+
 ## Basic implementation of Event Sourcing in TypeScript
 
 ```ts
