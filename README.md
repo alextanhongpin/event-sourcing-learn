@@ -12,13 +12,16 @@ How to deal with missing events? Will the queue be reliable enough? In case of f
 
 Events can be replayed from certain time frame, but still required the previous state from the previous events. How to optimize this? Most likely through snapshots of data from certain time period, and limit query only from specific time frame (from months, rather than days).
 
+Alternatively, we can update the snapshot once the version drifts to a specific delta (`event.version - aggregate.version > MAX_N_BEFORE_UPDATE_SNAPSHOT`).
+
 ## Dealing with multiple streams
 
 Some events can be generated from multiple sources - how do we merge the streams of events and ensure consistency? 
+It seems like the final aggregate states (projections?) are stored in-memory. 
 
 ## Initial State
 
-How do we define the initial state of any events?
+How do we define the initial state of any events? The creation should not include other field, and should be the first event to be raised. (It could include other fields, but specifying them would be hard).
 
 ## Undo
 
