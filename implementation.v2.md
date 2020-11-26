@@ -172,3 +172,133 @@ async function main() {
 
 main().catch(console.error);
 ```
+
+## Another version
+
+```ts
+abstract class Aggregate {
+  id: string
+  version: number
+  events: BaseEvent[]
+  constructor(id: string, version: number, events: BaseEvent[] = []) {
+    this.id = id
+    this.version = version
+    this.events = events
+  }
+  abstract apply(event: BaseEvent): void
+}
+
+abstract class BaseEvent {
+  readonly aggregateId: string
+  readonly aggregateVersion: number
+  constructor(aggregateId: string, aggregateVersion: number) {
+    this.aggregateId = aggregateId
+    this.aggregateVersion = aggregateVersion
+  } 
+}
+
+class PersonCreated extends BaseEvent {
+  name: string
+  constructor(aggregateId: string, aggregateVersion: number, name: string) {
+    super(aggregateId, aggregateVersion)
+    this.name = name
+  }
+}
+class PersonNameChanged extends BaseEvent {
+  name: string
+  constructor(aggregateId: string, aggregateVersion: number, name: string) {
+    super(aggregateId, aggregateVersion)
+    this.name = name
+  }
+}
+
+class Person extends Aggregate {
+  name: string = ''
+  constructor(id: string, version: number, events: BaseEvent[] = []) {
+    super(id, version, events)
+    for (const event of events) {
+      this.apply(event)
+    }
+    this.events = []
+  }
+
+  apply(event: BaseEvent) {
+    const eventName = event.constructor.name
+    switch (eventName) {
+      case PersonCreated.name: {
+        const e = event as PersonCreated
+        this.version = e.aggregateVersion
+        this.name = e.name
+        break
+      }
+      case PersonNameChanged.name: {
+        const e = event as PersonNameChanged
+        this.version = e.aggregateVersion
+        this.name = e.name
+        break
+      }
+      default:
+        throw new Error(`${eventName} is not implemented`)
+    }
+  }
+
+  setName(name: string) {
+    const event = new PersonNameChanged(this.id, this.version + 1, name)
+    this.apply(event)
+    this.events.push(event)
+  }
+
+  static new(id: string, name: string): Person {
+    const events = [new PersonCreated(id, 1, name)]
+    const person = new Person(id, 0, events)
+    person.events = events
+    return person
+  }
+}
+
+const person = Person.new('1', 'John')
+person.setName('John Doe')
+console.log(person)
+
+for (const event of person.events) {
+  console.log({...event, type: event.constructor.name})
+}
+
+interface RawEvent {
+  aggregateId: string
+  aggregateVersion: number
+  event: string
+}
+
+const rawEvents = [ {
+  "aggregateId": "1",
+  "aggregateVersion": 1,
+  "event": `{
+    "name": "John",
+    "type": "PersonCreated"
+  }`
+},{
+  "aggregateId": "1",
+  "aggregateVersion": 2,
+  "event": `{
+    "name": "John Doe",
+    "type": "PersonNameChanged"
+  }`
+}]
+
+const events = rawEvents.map((rawEvent: RawEvent) => {
+  const data = JSON.parse(rawEvent.event)
+  const { type: eventType, ...rest } = data
+  switch (eventType) {
+    case PersonCreated.name:
+      return new PersonCreated(rawEvent.aggregateId, rawEvent.aggregateVersion, rest.name)
+    case PersonNameChanged.name:
+      return new PersonNameChanged(rawEvent.aggregateId, rawEvent.aggregateVersion, rest.name)
+    default:
+      throw new Error(`${eventType} is not implemented`)
+  }
+})
+
+const loadedPerson = new Person('1', 2, events)
+console.log(loadedPerson.version, loadedPerson)
+```
