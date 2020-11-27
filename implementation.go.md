@@ -292,3 +292,178 @@ func main() {
 	log.Printf("Todo: %#v\n", todo)
 }
 ```
+
+## Revised implementation
+
+```go
+package main
+
+import (
+	"errors"
+	"fmt"
+	"log"
+	"reflect"
+)
+
+type event interface {
+	isEvent()
+}
+
+type Event struct {
+	AggregateID      string
+	AggregateVersion int
+}
+
+type Aggregate struct {
+	ID      string
+	Version int
+	Events  []event
+}
+
+func (a *Aggregate) Raise(e event) error {
+	return errors.New("not implemented")
+}
+
+func (a *Aggregate) Apply(e event) error {
+	return errors.New("not implemented")
+}
+
+type PatientAdmitted struct {
+	Event
+	Name string
+	Ward int
+}
+
+func (p PatientAdmitted) isEvent() {}
+
+type PatientDischarged struct {
+	Event
+}
+
+func (p PatientDischarged) isEvent() {}
+
+type PatientTransferred struct {
+	Event
+	Ward int
+}
+
+func (p PatientTransferred) isEvent() {}
+
+type Patient struct {
+	*Aggregate
+	name       string
+	ward       int
+	discharged bool
+}
+
+// NewPatient returns a new Patient from the past events.
+func NewPatient(id string, version int, events []event) *Patient {
+	p := &Patient{
+		Aggregate: &Aggregate{
+			ID:      id,
+			Version: version,
+		},
+	}
+	for _, e := range events {
+		if err := p.Apply(e); err != nil {
+			panic(err)
+		}
+	}
+	return p
+}
+
+func (p *Patient) Apply(e event) error {
+	switch t := e.(type) {
+	case PatientAdmitted:
+		p.name = t.Name
+		p.ward = t.Ward
+		p.Aggregate.ID = t.AggregateID
+		p.Aggregate.Version = t.AggregateVersion
+	case PatientTransferred:
+		p.ward = t.Ward
+		p.Aggregate.ID = t.AggregateID
+		p.Aggregate.Version = t.AggregateVersion
+	case PatientDischarged:
+		p.discharged = true
+		p.Aggregate.ID = t.AggregateID
+		p.Aggregate.Version = t.AggregateVersion
+	default:
+		return fmt.Errorf("not implemented: %s", getName(t))
+	}
+	return nil
+}
+
+func (p *Patient) Raise(e event) error {
+	p.Aggregate.Events = append(p.Aggregate.Events, e)
+	p.Apply(e)
+	return nil
+}
+
+func (p *Patient) Discharged() error {
+	if p.discharged {
+		return errors.New("patient is discharged")
+	}
+	return p.Raise(PatientDischarged{
+		Event: Event{
+			AggregateID:      p.ID,
+			AggregateVersion: p.Version + 1, // Increment the version by 1 for every new event raised.
+		},
+	})
+}
+
+func (p *Patient) Transfer(ward int) error {
+	if p.discharged {
+		return errors.New("patient is discharged")
+	}
+	return p.Raise(PatientTransferred{
+		Event: Event{
+			AggregateID:      p.ID,
+			AggregateVersion: p.Version + 1,
+		},
+		Ward: ward,
+	})
+}
+
+// AdmitPatient is a special factory that creates a new Patient by raising the PatientAdmitted event
+// and assigning the initial events.
+func AdmitPatient(id, name string, ward int) *Patient {
+	events := []event{
+		PatientAdmitted{
+			Event: Event{
+				AggregateID:      id,
+				AggregateVersion: 0 + 1,
+			},
+			Name: name,
+			Ward: ward,
+		},
+	}
+	p := NewPatient(id, 0, events)
+	p.Events = events
+	return p
+}
+
+func getName(i interface{}) string {
+	if t := reflect.TypeOf(i); t.Kind() == reflect.Ptr {
+		return t.Elem().Name()
+	} else {
+		return t.Name()
+	}
+}
+
+func main() {
+	p := AdmitPatient("1", "John", 42)
+	if err := p.Transfer(51); err != nil {
+		log.Fatal(err)
+	}
+	if err := p.Discharged(); err != nil {
+		log.Fatal(err)
+	}
+	if err := p.Discharged(); err != nil {
+		fmt.Println(err)
+	}
+	for _, e := range p.Events {
+		fmt.Printf("%#v\n", e)
+	}
+	fmt.Printf("%#v", p)
+}
+```
