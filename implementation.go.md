@@ -312,6 +312,7 @@ type event interface {
 type Event struct {
 	AggregateID      string
 	AggregateVersion int
+	Name             string // Optional?
 }
 
 type Aggregate struct {
@@ -328,26 +329,26 @@ func (a *Aggregate) Apply(e event) error {
 	return errors.New("not implemented")
 }
 
-type PatientAdmitted struct {
-	Event
-	Name string
-	Ward int
-}
-
-func (p PatientAdmitted) isEvent() {}
-
-type PatientDischarged struct {
-	Event
-}
-
-func (p PatientDischarged) isEvent() {}
-
-type PatientTransferred struct {
-	Event
-	Ward int
-}
-
+func (p PatientAdmitted) isEvent()    {}
+func (p PatientDischarged) isEvent()  {}
 func (p PatientTransferred) isEvent() {}
+
+type (
+	PatientAdmitted struct {
+		Event
+		Name string
+		Ward int
+	}
+
+	PatientDischarged struct {
+		Event
+	}
+
+	PatientTransferred struct {
+		Event
+		Ward int
+	}
+)
 
 type Patient struct {
 	*Aggregate
@@ -407,6 +408,7 @@ func (p *Patient) Discharged() error {
 		Event: Event{
 			AggregateID:      p.ID,
 			AggregateVersion: p.Version + 1, // Increment the version by 1 for every new event raised.
+			Name:             getName(&PatientDischarged{}),
 		},
 	})
 }
@@ -419,6 +421,7 @@ func (p *Patient) Transfer(ward int) error {
 		Event: Event{
 			AggregateID:      p.ID,
 			AggregateVersion: p.Version + 1,
+			Name:             getName(&PatientTransferred{}),
 		},
 		Ward: ward,
 	})
@@ -432,6 +435,7 @@ func AdmitPatient(id, name string, ward int) *Patient {
 			Event: Event{
 				AggregateID:      id,
 				AggregateVersion: 0 + 1,
+				Name:             getName(&PatientAdmitted{}),
 			},
 			Name: name,
 			Ward: ward,
@@ -464,6 +468,7 @@ func main() {
 	for _, e := range p.Events {
 		fmt.Printf("%#v\n", e)
 	}
-	fmt.Printf("%#v", p)
+	fmt.Printf("%#v\n", p.Aggregate)
+	fmt.Printf("%#v\n", p)
 }
 ```
