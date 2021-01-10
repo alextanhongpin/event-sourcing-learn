@@ -32,6 +32,122 @@ Aside from splitting the read and write, what other differences does CQRS provid
 
 For command/event handlers, we might not expect the response. This differs from typical request/response pattern, where the interaction is synchronous. For command/event pattern, they are typically asynchronous, and is handled through a queue. The events can be pushed to a queue, and there can be multiple consumers that listens to the queue and perform actions.
 
+## Commands vs Events
+
+We can publish a command to perform a specific action. Events are just a description of the past. We can also subscribe to events to perform specific actions. This may cause a lot of confusion, say for example for a user registration system:
+1. User register
+2. A `UserRegisteredEvent` is created. 
+
+If we want to send an email, how do we do it?
+
+1. Listen to the event `UserRegisteredEvent` and let the __event processor__ delegate it to the right __event handler__ to execute the email delivery.
+2. Publish a `SendRegistrationEmailCommand`, and let the __command processor__ delegate it to the right __command handler__ to execute the email delivery.
+
+Both ways are correct, but we can specify a ground rule - that a service can only listen to it's own events, and not publish it to external services. Commands however can be published to external services.
+
+Say if we only have one User Service that handles both registration and email delivery:
+
+```
+User Service:
+1. Produce UserRegisteredEvent
+2. Listens to UserRegisteredEvent
+3. Sends email
+```
+
+But if we decided to split it:
+```
+Email Service:
+1. Listens to SendRegistrationEmailCommand
+2. Sends email
+
+User Service:
+1. Produce UserRegisteredEvent
+2. Listens to UserRegisteredEvent
+3. Maps to SendRegistrationEmailCommand
+4. Publish SendRegistrationEmailCommand
+```
+
+We choose this over sending an event not related to the Email service domain:
+
+```
+Email Service:
+1. Listens to UserRegisteredEvent (?, it is hard to discern what to do with the event)
+2. Sends email
+
+User Service:
+1. Produce UserRegisteredEvent
+2. Listens to UserRegisteredEvent
+3. Publish UserRegisteredEvent to other services (?)
+```
+
+Let's exaggerate the system by creating multiple emails with the suggested approach:
+
+```
+# Command Listener
+Email Service:
+1. Listens to SendRegistrationEmailCommand, SendInvoiceEmailCommand, SendThankYouEmail
+2. Sends email
+
+User Service:
+1. Produce UserRegisteredEvent
+2. Listens to UserRegisteredEvent
+3. Maps to SendRegistrationEmailCommand
+4. Publish SendRegistrationEmailCommand
+
+Payment Service:
+1. Produce PaymentMadeEvent
+2. Listens to PaymentMadeEvent
+3. Maps to SendInvoiceEmailCommand
+4. Publish SendInvoiceEmailCommand
+
+Subscription Service:
+1. Produce SubscribedEvent
+2. Listens to SubscribedEvent
+3. Maps to SendThankYouEmail
+4. Publish SendThankYouEmail
+```
+Versus:
+
+```
+# Event Listener
+Email Service:
+1. Listens to UserRegisteredEvent, PaymentMadeEvent, SubscribedEvent
+2. Sends email
+
+User Service:
+1. Produce UserRegisteredEvent
+2. Publish UserRegisteredEvent
+
+Payment Service:
+1. Produce PaymentMadeEvent
+2. Publish PaymentMadeEvent
+
+Subscription Service:
+1. Produce SubscribedEvent
+2. Publish to SubscribedEvent
+```
+
+## Versioning events and commands
+
+Since most commands and events does not produce reply, it's hard for client to know if something goes wrong (deprecation, etc). Hence, it is better for the message published to include the source, as well as the versioning.
+
+```
+Message:
+- supertype of Event and Command
+
+Event
+- type
+- payload
+- version (1, 2...)
+- source (to allow us to know which client uses a different version)
+
+Command
+- action
+- payload
+- version
+- source
+```
+
 ## References
 - https://medium.com/@marinithiago/doing-event-sourcing-without-building-a-spaceship-6dc3e7eac00
 - https://javascript-conference.com/node-js/implement-event-sourcing-in-node-js/
