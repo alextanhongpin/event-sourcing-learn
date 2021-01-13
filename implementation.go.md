@@ -12,23 +12,22 @@ import (
 )
 
 func main() {
+	// Create a new Person.
 	p, err := NewPerson("id-1", "john", 20)
 	if err != nil {
 		log.Fatal(err)
 	}
 	p.SetName("John Doe")
+	
+	fmt.Println("NewPerson", prettyJSON(p))
 
-	b, err := json.MarshalIndent(p, "", "  ")
+	// Assuming the events are serialized into JSON before stored into the EventStore.
+	b, err := json.Marshal(p.Events)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	fmt.Println("NewPerson", string(b))
-
-	b, err = json.MarshalIndent(p.Events, "", "  ")
-	if err != nil {
-		log.Fatal(err)
-	}
+	
+	// Deserialize the JSON events into their respective types.
 	var genericEvents []GenericEvent
 	if err := json.Unmarshal(b, &genericEvents); err != nil {
 		log.Fatal(err)
@@ -44,29 +43,30 @@ func main() {
 			log.Fatalf("not implemented: %#v", e)
 		}
 	}
+
+	// Rebuild the Person from past events.
 	p2, err := NewPersonFromEvents("id-1", events)
 	if err != nil {
 		log.Fatal(err)
 	}
-	b, err = json.MarshalIndent(p2, "", "  ")
-	if err != nil {
-		log.Fatal(err)
-	}
+	fmt.Println("NewPersonFromEvents", prettyJSON(p2))
 
-	fmt.Println("NewPersonFromEvents", string(b))
-
+	// Past events are used to replay the entity to the current state,
+	// but they are not stored in the entity. Only new events are appended.
 	p2.SetName("alice")
-	b, err = json.MarshalIndent(p2, "", "  ")
+
+	fmt.Println("p2.SetName", prettyJSON(p2))
+}
+
+func prettyJSON(v interface{}) string {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	fmt.Println("UpdatedPersonName", string(b))
+	return string(b)
 }
 
 type event interface {
-	isEvent()
-
 	GetAggregateID() string
 	GetAggregateVersion() int
 	GetTypeName() string
@@ -111,7 +111,6 @@ func NewPersonCreated(aggregateID string, aggregateVersion int, name string, age
 		Age:   age,
 	}
 }
-func (p PersonCreated) isEvent() {}
 
 type PersonNameChanged struct {
 	Event
@@ -124,7 +123,6 @@ func NewPersonNameChanged(aggregateID string, aggregateVersion int, name string)
 		Name:  name,
 	}
 }
-func (p PersonNameChanged) isEvent() {}
 
 type Aggregate struct {
 	TypeName         string  `json:"__typename"`
@@ -238,56 +236,5 @@ func (g *GenericEvent) UnmarshalJSON(b []byte) error {
 		return fmt.Errorf("not implemented: %s", o.TypeName)
 	}
 	return nil
-}
-```
-
-
-Output:
-
-```json
-NewPerson {
-  "__typename": "",
-  "aggregate_id": "id-1",
-  "aggregate_version": 2,
-  "events": [
-    {
-      "aggregate_id": "id-1",
-      "aggregate_version": 1,
-      "__typename": "PersonCreated",
-      "name": "john",
-      "age": 20
-    },
-    {
-      "aggregate_id": "id-1",
-      "aggregate_version": 2,
-      "__typename": "PersonNameChanged",
-      "name": "John Doe"
-    }
-  ],
-  "name": "John Doe",
-  "age": 20
-}
-NewPersonFromEvents {
-  "__typename": "",
-  "aggregate_id": "id-1",
-  "aggregate_version": 2,
-  "events": null,
-  "name": "John Doe",
-  "age": 20
-}
-UpdatedPersonName {
-  "__typename": "",
-  "aggregate_id": "id-1",
-  "aggregate_version": 3,
-  "events": [
-    {
-      "aggregate_id": "id-1",
-      "aggregate_version": 3,
-      "__typename": "PersonNameChanged",
-      "name": "alice"
-    }
-  ],
-  "name": "alice",
-  "age": 20
 }
 ```
