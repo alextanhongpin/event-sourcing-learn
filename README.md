@@ -148,6 +148,22 @@ Command
 - source
 ```
 
+## DDD, CQRS and Event Sourcing
+
+
+What is the limitation of CRUD?
+- lack of audit log. In Event Sourcing, events that describes the changes of the entity is stored. CRUD only persist the current state of the system - can we have both? While it is possible to store incoming messages and use it as audit log, this approach results in data duplication and contradicts the single source of truth. When there’s conflict between the persisted data and audit log, there will be no way to determine the state of the system. 
+
+
+https://axoniq.io/resources/architectural-concepts
+https://arkwright.github.io/event-sourcing.html
+
+
+## Audit Log vs Event Sourcing
+https://github.com/JamesRandall/AzureFromTheTrenches.Commanding/wiki/6.-Auditing-and-Event-Sourcing
+https://stablekernel.com/article/storing-historical-data-with-postgresql-and-automatic-partitions/
+
+
 ## References
 - https://medium.com/@marinithiago/doing-event-sourcing-without-building-a-spaceship-6dc3e7eac00
 - https://javascript-conference.com/node-js/implement-event-sourcing-in-node-js/
@@ -155,3 +171,5 @@ Command
 - https://docs.microsoft.com/en-us/azure/architecture/patterns/event-sourcing#:~:text=The%20Event%20Sourcing%20pattern%20defines,in%20an%20append%2Donly%20store.&text=The%20events%20are%20persisted%20in,current%20state%20of%20the%20data.
 - https://kickstarter.engineering/event-sourcing-made-simple-4a2625113224
 - http://blog.leifbattermann.de/2017/04/21/12-things-you-should-know-about-event-sourcing/
+
+
