@@ -1,5 +1,5 @@
 # Event Sourcing Research
-
+https://leanpub.com/esversioning/read
 ## Transport
 
 Using queues such as RabbitMQ or Kafka (Kinesis on AWS).
