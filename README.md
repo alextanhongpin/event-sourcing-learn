@@ -172,4 +172,6 @@ https://stablekernel.com/article/storing-historical-data-with-postgresql-and-aut
 - https://kickstarter.engineering/event-sourcing-made-simple-4a2625113224
 - http://blog.leifbattermann.de/2017/04/21/12-things-you-should-know-about-event-sourcing/
 
-
+Postgres
+https://dev.to/kspeakman/event-storage-in-postgres-4dk2
+https://softwaremill.com/implementing-event-sourcing-using-a-relational-database/
