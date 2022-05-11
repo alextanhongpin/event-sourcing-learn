@@ -6,8 +6,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+)
+
+const (
+	PersonNameUpdatedEvent = "person_name_updated"
+	PersonCreatedEvent     = "person_created"
 )
 
 func main() {
@@ -18,10 +24,79 @@ func main() {
 	fmt.Println(person.Name, person.Age)
 	fmt.Println(person.UpdateName("Jane"))
 	fmt.Println(person.Name, person.Age, person.Aggregate)
+
+	b, err := json.Marshal(person.Events)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+	var jsonEvents []JSONEvent
+	if err := json.Unmarshal(b, &jsonEvents); err != nil {
+		panic(err)
+	}
+	fmt.Println("JSONEvents", jsonEvents)
+	events := make([]Event[any], len(jsonEvents))
+	for i, je := range jsonEvents {
+		events[i] = *je.ToEvent()
+	}
+	person2, err := NewPersonFromEvents(person.Aggregate.ID, events)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("person 2", person2)
+	if err := person2.UpdateName("jessie"); err != nil {
+		panic(err)
+	}
+	
+	// Only new events should be appended. This new events will then be saved in the storage layer.
+	fmt.Println("person 2: updated name", person2)
 }
 
-type IEvent interface {
-	isEvent()
+type JSONEvent struct {
+	PersonCreated     *Event[any]
+	PersonNameUpdated *Event[any]
+}
+
+func (j *JSONEvent) ToEvent() *Event[any] {
+	if j.PersonCreated != nil {
+		return j.PersonCreated
+	}
+	if j.PersonNameUpdated != nil {
+		return j.PersonNameUpdated
+	}
+	return nil
+}
+
+func (j *JSONEvent) UnmarshalJSON(data []byte) error {
+	var e Event[any]
+	if err := json.Unmarshal(data, &e); err != nil {
+		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: %w", err)
+	}
+	switch e.TypeName {
+	case PersonCreatedEvent:
+		type personCreatedJSON struct {
+			Data PersonCreated `json:"data"`
+		}
+		var evt personCreatedJSON
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return err
+		}
+		e.Data = evt.Data
+		j.PersonCreated = &e
+	case PersonNameUpdatedEvent:
+		type personNameUpdatedJSON struct {
+			Data PersonNameUpdated `json:"data"`
+		}
+		var evt personNameUpdatedJSON
+		if err := json.Unmarshal(data, &evt); err != nil {
+			return err
+		}
+		e.Data = evt.Data
+		j.PersonNameUpdated = &e
+	default:
+		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: invalid typename %s", e.TypeName)
+	}
+	return nil
 }
 
 type Event[T any] struct {
@@ -34,18 +109,18 @@ type Event[T any] struct {
 type Aggregate struct {
 	ID      string
 	Version int64
-	Events  []Event[IEvent]
+	Events  []Event[any]
 }
 
 func NewAggregate(id string) *Aggregate {
 	return &Aggregate{
 		ID:      id,
 		Version: 0,
-		Events:  make([]Event[IEvent], 0),
+		Events:  make([]Event[any], 0),
 	}
 }
 
-func (a *Aggregate) CanApply(event Event[IEvent]) error {
+func (a *Aggregate) CanApply(event Event[any]) error {
 	if event.AggregateID != a.ID {
 		return errors.New("invalid aggregate id")
 	}
@@ -55,45 +130,51 @@ func (a *Aggregate) CanApply(event Event[IEvent]) error {
 	return nil
 }
 
-func (a *Aggregate) Append(event Event[IEvent]) {
+func (a *Aggregate) Apply(event Event[any]) error {
+	if err := a.CanApply(event); err != nil {
+		return err
+	}
+	a.Version = event.AggregateVersion
+	return nil
+}
+
+func (a *Aggregate) Append(event Event[any]) {
 	a.Events = append(a.Events, event)
 }
 
 type PersonCreated struct {
-	Name string
-	Age  int64
+	Name string `json:"name"`
+	Age  int64  `json:"age"`
 }
 
-func NewPersonCreated(aggregateID string, aggregateVersion int64, name string, age int64) Event[IEvent] {
-	return Event[IEvent]{
+func NewPersonCreated(aggregateID string, aggregateVersion int64, name string, age int64) Event[any] {
+	return Event[any]{
 		AggregateID:      aggregateID,
 		AggregateVersion: aggregateVersion,
 		// Instead of inferring the type from the struct name, we hardcode.
 		// This makes it more resistant to chance as well as accidental renaming of the event.
-		TypeName: "person_created",
+		TypeName: PersonCreatedEvent,
 		Data: PersonCreated{
 			Name: name,
 			Age:  age,
 		},
 	}
 }
-func (p PersonCreated) isEvent() {}
 
 type PersonNameUpdated struct {
-	Name string
+	Name string `json:"name"`
 }
 
-func NewPersonNameUpdated(aggregateID string, aggregateVersion int64, name string) Event[IEvent] {
-	return Event[IEvent]{
+func NewPersonNameUpdated(aggregateID string, aggregateVersion int64, name string) Event[any] {
+	return Event[any]{
 		AggregateID:      aggregateID,
 		AggregateVersion: aggregateVersion,
-		TypeName:         "person_name_updated",
+		TypeName:         PersonNameUpdatedEvent,
 		Data: PersonNameUpdated{
 			Name: name,
 		},
 	}
 }
-func (p PersonNameUpdated) isEvent() {}
 
 type Person struct {
 	Aggregate
@@ -105,6 +186,8 @@ func NewPerson(aggregateID string, name string, age int64) (*Person, error) {
 	agg := &Person{
 		Aggregate: *NewAggregate(aggregateID),
 	}
+
+	// The creator of the event must increment the event version.
 	evt := NewPersonCreated(agg.Aggregate.ID, agg.Aggregate.Version+1, name, age)
 	if err := agg.Raise(evt); err != nil {
 		return nil, err
@@ -117,25 +200,44 @@ func (p *Person) UpdateName(name string) error {
 	return p.Raise(evt)
 }
 
-func (p *Person) Apply(event Event[IEvent]) error {
-	if err := p.Aggregate.CanApply(event); err != nil {
-		return err
+func (p *Person) Apply(events ...Event[any]) error {
+	for _, evt := range events {
+		if err := p.Aggregate.Apply(evt); err != nil {
+			return err
+		}
+
+		switch e := any(evt.Data).(type) {
+		case PersonCreated:
+			p.Name = e.Name
+			p.Age = e.Age
+		case PersonNameUpdated:
+			p.Name = e.Name
+		default:
+			return fmt.Errorf("not implemented: %s", evt.TypeName)
+		}
 	}
 
-	switch e := any(event.Data).(type) {
-	case PersonCreated:
-		p.Name = e.Name
-		p.Age = e.Age
-	case PersonNameUpdated:
-		p.Name = e.Name
-	default:
-		return fmt.Errorf("not implemented: %s", event.TypeName)
+	return nil
+}
+
+func (p *Person) Raise(events ...Event[any]) error {
+	for _, evt := range events {
+		if err := p.Apply(evt); err != nil {
+			return err
+		}
+		p.Aggregate.Append(evt)
 	}
 	return nil
 }
 
-func (p *Person) Raise(event Event[IEvent]) error {
-	p.Aggregate.Append(event)
-	return p.Apply(event)
+func NewPersonFromEvents(aggregateID string, events []Event[any]) (*Person, error) {
+	p := &Person{
+		Aggregate: *NewAggregate(aggregateID),
+	}
+	if err := p.Apply(events...); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
+
 ```
