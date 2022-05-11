@@ -1,5 +1,8 @@
 ## Using Generics
 
+- actually there are no reasons to use generic, removing the `T` from `Event` still compiles fine
+- the version increment is not thread-safe, probably use atomic (?)
+
 ```go
 // You can edit this code!
 // Click here and start typing.
