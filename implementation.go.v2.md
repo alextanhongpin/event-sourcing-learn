@@ -5,13 +5,19 @@
 // Click here and start typing.
 package main
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 func main() {
-	person := NewPerson("person-1", 1, "John Doe", 1)
+	person, err := NewPerson("person-1", "John Doe", 1)
+	if err != nil {
+		panic(err)
+	}
 	fmt.Println(person.Name, person.Age)
-	person.UpdateName("Jane")
-	fmt.Println(person)
+	fmt.Println(person.UpdateName("Jane"))
+	fmt.Println(person.Name, person.Age, person.Aggregate)
 }
 
 type IEvent interface {
@@ -31,6 +37,28 @@ type Aggregate struct {
 	Events  []Event[IEvent]
 }
 
+func NewAggregate(id string) *Aggregate {
+	return &Aggregate{
+		ID:      id,
+		Version: 0,
+		Events:  make([]Event[IEvent], 0),
+	}
+}
+
+func (a *Aggregate) CanApply(event Event[IEvent]) error {
+	if event.AggregateID != a.ID {
+		return errors.New("invalid aggregate id")
+	}
+	if event.AggregateVersion != a.Version+1 {
+		return errors.New("invalid aggregate version")
+	}
+	return nil
+}
+
+func (a *Aggregate) Append(event Event[IEvent]) {
+	a.Events = append(a.Events, event)
+}
+
 type PersonCreated struct {
 	Name string
 	Age  int64
@@ -40,7 +68,9 @@ func NewPersonCreated(aggregateID string, aggregateVersion int64, name string, a
 	return Event[IEvent]{
 		AggregateID:      aggregateID,
 		AggregateVersion: aggregateVersion,
-		TypeName:         "person_created",
+		// Instead of inferring the type from the struct name, we hardcode.
+		// This makes it more resistant to chance as well as accidental renaming of the event.
+		TypeName: "person_created",
 		Data: PersonCreated{
 			Name: name,
 			Age:  age,
@@ -71,38 +101,41 @@ type Person struct {
 	Age  int64
 }
 
-func (p *Person) UpdateName(name string) Event[IEvent] {
-	evt := NewPersonNameUpdated(p.Aggregate.ID, p.Aggregate.Version+1, name)
-	p.Raise(evt)
-	return evt
-}
-
-func NewPerson(aggregateID string, aggregateVersion int64, name string, age int64) *Person {
+func NewPerson(aggregateID string, name string, age int64) (*Person, error) {
 	agg := &Person{
-		Aggregate: Aggregate{
-			ID:      aggregateID,
-			Version: aggregateVersion,
-			Events:  make([]Event[IEvent], 0),
-		},
+		Aggregate: *NewAggregate(aggregateID),
 	}
-	evt := NewPersonCreated(aggregateID, aggregateVersion, name, age)
-	agg.Raise(evt)
-	return agg
+	evt := NewPersonCreated(agg.Aggregate.ID, agg.Aggregate.Version+1, name, age)
+	if err := agg.Raise(evt); err != nil {
+		return nil, err
+	}
+	return agg, nil
 }
 
-func (p *Person) Apply(event Event[IEvent]) {
+func (p *Person) UpdateName(name string) error {
+	evt := NewPersonNameUpdated(p.Aggregate.ID, p.Aggregate.Version+1, name)
+	return p.Raise(evt)
+}
+
+func (p *Person) Apply(event Event[IEvent]) error {
+	if err := p.Aggregate.CanApply(event); err != nil {
+		return err
+	}
+
 	switch e := any(event.Data).(type) {
 	case PersonCreated:
-		p.Aggregate.ID = event.AggregateID
-		p.Aggregate.Version = event.AggregateVersion
 		p.Name = e.Name
 		p.Age = e.Age
+	case PersonNameUpdated:
+		p.Name = e.Name
+	default:
+		return fmt.Errorf("not implemented: %s", event.TypeName)
 	}
+	return nil
 }
 
-func (p *Person) Raise(event Event[IEvent]) {
-	p.Aggregate.Events = append(p.Aggregate.Events, event)
-	p.Apply(event)
+func (p *Person) Raise(event Event[IEvent]) error {
+	p.Aggregate.Append(event)
+	return p.Apply(event)
 }
-
 ```
