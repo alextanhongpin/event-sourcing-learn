@@ -37,7 +37,7 @@ func main() {
 	fmt.Println("JSONEvents", jsonEvents)
 	events := make([]Event[any], len(jsonEvents))
 	for i, je := range jsonEvents {
-		events[i] = *je.ToEvent()
+		events[i] = je.Event
 	}
 	person2, err := NewPersonFromEvents(person.Aggregate.ID, events)
 	if err != nil {
@@ -47,54 +47,39 @@ func main() {
 	if err := person2.UpdateName("jessie"); err != nil {
 		panic(err)
 	}
-	
+
 	// Only new events should be appended. This new events will then be saved in the storage layer.
 	fmt.Println("person 2: updated name", person2)
 }
 
-type JSONEvent struct {
-	PersonCreated     *Event[any]
-	PersonNameUpdated *Event[any]
+type Data[T any] struct {
+	Data T `json:"data"`
 }
 
-func (j *JSONEvent) ToEvent() *Event[any] {
-	if j.PersonCreated != nil {
-		return j.PersonCreated
-	}
-	if j.PersonNameUpdated != nil {
-		return j.PersonNameUpdated
-	}
-	return nil
+type JSONEvent struct {
+	Event[any]
 }
 
 func (j *JSONEvent) UnmarshalJSON(data []byte) error {
-	var e Event[any]
-	if err := json.Unmarshal(data, &e); err != nil {
+	if err := json.Unmarshal(data, &j.Event); err != nil {
 		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: %w", err)
 	}
-	switch e.TypeName {
+
+	switch j.Event.TypeName {
 	case PersonCreatedEvent:
-		type personCreatedJSON struct {
-			Data PersonCreated `json:"data"`
-		}
-		var evt personCreatedJSON
+		var evt Data[PersonCreated]
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return err
 		}
-		e.Data = evt.Data
-		j.PersonCreated = &e
+		j.Event.Data = evt.Data
 	case PersonNameUpdatedEvent:
-		type personNameUpdatedJSON struct {
-			Data PersonNameUpdated `json:"data"`
-		}
-		var evt personNameUpdatedJSON
+		var evt Data[PersonNameUpdated]
 		if err := json.Unmarshal(data, &evt); err != nil {
 			return err
 		}
-		e.Data = evt.Data
-		j.PersonNameUpdated = &e
+		j.Event.Data = evt.Data
 	default:
-		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: invalid typename %s", e.TypeName)
+		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: invalid typename %s", j.Event.TypeName)
 	}
 	return nil
 }
@@ -239,5 +224,4 @@ func NewPersonFromEvents(aggregateID string, events []Event[any]) (*Person, erro
 	}
 	return p, nil
 }
-
 ```
