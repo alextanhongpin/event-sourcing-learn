@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,35 +53,41 @@ func main() {
 	fmt.Println("person 2: updated name", person2)
 }
 
-type Data[T any] struct {
-	Data T `json:"data"`
-}
-
 type JSONEvent struct {
 	Event[any]
 }
 
-func (j *JSONEvent) UnmarshalJSON(data []byte) error {
-	if err := json.Unmarshal(data, &j.Event); err != nil {
+func (j *JSONEvent) UnmarshalJSON(raw []byte) error {
+	type event struct {
+		Event[any]
+		Data json.RawMessage `json:"data"`
+	}
+	var e event
+	if err := json.Unmarshal(raw, &e); err != nil {
 		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: %w", err)
 	}
 
-	switch j.Event.TypeName {
+	dec := json.NewDecoder(bytes.NewReader(e.Data))
+	dec.DisallowUnknownFields()
+
+	switch e.Event.TypeName {
 	case PersonCreatedEvent:
-		var evt Data[PersonCreated]
-		if err := json.Unmarshal(data, &evt); err != nil {
+		var data PersonCreated
+		if err := dec.Decode(&data); err != nil {
 			return err
 		}
-		j.Event.Data = evt.Data
+		e.Event.Data = data
 	case PersonNameUpdatedEvent:
-		var evt Data[PersonNameUpdated]
-		if err := json.Unmarshal(data, &evt); err != nil {
+		var data PersonNameUpdated
+		if err := dec.Decode(&data); err != nil {
 			return err
 		}
-		j.Event.Data = evt.Data
+		e.Event.Data = data
 	default:
 		return fmt.Errorf("JSONEvent.UnmarshalJSON Error: invalid typename %s", j.Event.TypeName)
 	}
+
+	j.Event = e.Event
 	return nil
 }
 
