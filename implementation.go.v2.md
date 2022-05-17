@@ -235,3 +235,98 @@ func NewPersonFromEvents(aggregateID string, events []Event[any]) (*Person, erro
 	return p, nil
 }
 ```
+
+## Union types
+
+```go
+// You can edit this code!
+// Click here and start typing.
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
+
+func main() {
+	events := []Event{
+		Event{"pat1", 1, "PatientAdmitted", PatientAdmitted{Name: "John", Age: 13, Ward: "123"}},
+		Event{"pat1", 2, "PatientTransferred", PatientTransferred{Ward: "321"}},
+	}
+	b := pretty(events)
+
+	var events2 []Event
+	if err := json.Unmarshal(b, &events2); err != nil {
+		panic(err)
+	}
+	fmt.Println(events2)
+}
+
+func pretty(data any) []byte {
+	b, err := json.MarshalIndent(data, "", " ")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(string(b))
+	return b
+}
+
+type Event struct {
+	AggregateID      string
+	AggregateVersion int
+	TypeName         string
+	Data             any
+}
+
+func (e *Event) UnmarshalJSON(raw []byte) error {
+	type event struct {
+		AggregateID      string
+		AggregateVersion int
+		TypeName         string
+		Data             json.RawMessage
+	}
+
+	var evt event
+	if err := json.Unmarshal(raw, &evt); err != nil {
+		return err
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(evt.Data))
+	dec.DisallowUnknownFields()
+
+	switch evt.TypeName {
+	case "PatientAdmitted":
+		var data PatientAdmitted
+		if err := dec.Decode(&data); err != nil {
+			return err
+		}
+		e.Data = data
+	case "PatientTransferred":
+		var data PatientTransferred
+		if err := dec.Decode(&data); err != nil {
+			return err
+		}
+		e.Data = data
+	default:
+		return fmt.Errorf("not handled: %s", evt.TypeName)
+	}
+	e.AggregateID = evt.AggregateID
+	e.AggregateVersion = evt.AggregateVersion
+	e.TypeName = evt.TypeName
+	return nil
+}
+
+type PatientAdmitted struct {
+	_    struct{}
+	Name string
+	Age  int
+	Ward string
+}
+type PatientTransferred struct {
+	_    struct{}
+	Ward string
+}
+
+```
+	p := &Person{
